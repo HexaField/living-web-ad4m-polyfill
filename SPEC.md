@@ -4,7 +4,7 @@
 
 ## 1. Overview
 
-The [Living Web proposals](https://github.com/nicoth-in/w3c-living-web-proposals) define five neutral browser specs:
+The [Living Web proposals](https://github.com/HexaField/w3c-living-web-proposals) define five neutral browser specs:
 
 1. **Personal Linked-Data Graphs** — `navigator.graph` for local semantic triple stores
 2. **Decentralised Identity** — `navigator.credentials` extension for DID-based identity

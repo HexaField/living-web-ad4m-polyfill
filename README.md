@@ -1,6 +1,6 @@
 # @living-web/ad4m-polyfill
 
-Bridges the [Living Web](https://github.com/nicoth-in/w3c-living-web-proposals) `navigator.graph` + `navigator.credentials` browser API to the [AD4M](https://ad4m.dev) executor.
+Bridges the [Living Web](https://github.com/HexaField/w3c-living-web-proposals) `navigator.graph` + `navigator.credentials` browser API to the [AD4M](https://ad4m.dev) executor.
 
 Apps written against the neutral Living Web specs work on AD4M without modification.
 
