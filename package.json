@@ -1,0 +1,33 @@
+{
+  "name": "@living-web/ad4m-polyfill",
+  "version": "0.1.0",
+  "description": "Living Web navigator.graph polyfill backed by AD4M executor",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "graphql-ws": "^5.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HexaField/living-web-ad4m-polyfill"
+  },
+  "keywords": ["living-web", "ad4m", "polyfill", "navigator.graph", "decentralized", "linked-data"]
+}
