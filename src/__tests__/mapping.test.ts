@@ -324,9 +324,6 @@ describe('GovernanceEngine', () => {
 // ── Shape validation tests (in-memory) ──
 
 describe('Shape validation (PersonalGraph)', () => {
-  // These test the validation logic without a real AD4M client
-  // The actual PersonalGraph requires AD4M, so we test the parsing logic
-
   it('shape MUST have targetClass, properties, constructor', () => {
     const valid = JSON.stringify({
       targetClass: 'schema:Person',
@@ -354,5 +351,243 @@ describe('Shape validation (PersonalGraph)', () => {
   it('rejects shape with missing property path', () => {
     const prop = { name: 'name' };
     expect(prop).not.toHaveProperty('path');
+  });
+});
+
+// ── Credential constraint tests ──
+
+describe('GovernanceEngine — credential constraints', () => {
+  it('rejects when required VC type not found in perspective links', async () => {
+    const constraint = JSON.stringify({
+      id: 'cred1',
+      constraint_kind: 'credential',
+      entry_type: 'triple',
+      required_vc_type: 'ProofOfHumanity',
+    });
+    const client = {
+      query: vi.fn().mockImplementation((_gql: string, vars: any) => {
+        // Constraint query
+        if (vars?.query?.predicate === 'governance://has_constraint') {
+          return Promise.resolve({
+            perspectiveQueryLinks: [
+              { data: { source: 'urn:a', predicate: 'governance://has_constraint', target: constraint } },
+            ],
+          });
+        }
+        // VC query — no credentials
+        if (vars?.query?.predicate === 'vc://has_credential') {
+          return Promise.resolve({ perspectiveQueryLinks: [] });
+        }
+        // Parent lookup
+        if (vars?.query?.predicate === 'has_child') {
+          return Promise.resolve({ perspectiveQueryLinks: [] });
+        }
+        return Promise.resolve({
+          agent: { did: 'did:key:zRoot' },
+          perspectiveQueryLinks: [],
+          perspective: { creator: 'did:key:zRoot' },
+        });
+      }),
+      mutate: vi.fn().mockResolvedValue({}),
+    } as any;
+
+    const gov = new GovernanceEngine('test-uuid', client);
+    const triple = new SemanticTriple('urn:a', 'hello', 'schema:text');
+    const result = await gov.canAddTriple(triple);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('ProofOfHumanity');
+  });
+
+  it('allows when required VC type found in perspective links', async () => {
+    const vc = JSON.stringify({ type: 'ProofOfHumanity', issuer: 'did:key:zIssuer', issuanceDate: new Date().toISOString() });
+    const constraint = JSON.stringify({
+      id: 'cred2',
+      constraint_kind: 'credential',
+      entry_type: 'triple',
+      required_vc_type: 'ProofOfHumanity',
+    });
+    const client = {
+      query: vi.fn().mockImplementation((_gql: string, vars: any) => {
+        if (vars?.query?.predicate === 'governance://has_constraint') {
+          return Promise.resolve({
+            perspectiveQueryLinks: [
+              { data: { source: 'urn:a', predicate: 'governance://has_constraint', target: constraint } },
+            ],
+          });
+        }
+        if (vars?.query?.predicate === 'vc://has_credential') {
+          return Promise.resolve({
+            perspectiveQueryLinks: [
+              { data: { source: 'did:key:zRoot', predicate: 'vc://has_credential', target: vc } },
+            ],
+          });
+        }
+        if (vars?.query?.predicate === 'has_child') {
+          return Promise.resolve({ perspectiveQueryLinks: [] });
+        }
+        return Promise.resolve({
+          agent: { did: 'did:key:zRoot' },
+          perspectiveQueryLinks: [],
+          perspective: { creator: 'did:key:zRoot' },
+        });
+      }),
+      mutate: vi.fn().mockResolvedValue({}),
+    } as any;
+
+    const gov = new GovernanceEngine('test-uuid', client);
+    const triple = new SemanticTriple('urn:a', 'hello', 'schema:text');
+    const result = await gov.canAddTriple(triple);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('rejects expired credentials', async () => {
+    const pastDate = new Date(Date.now() - 86400000).toISOString();
+    const vc = JSON.stringify({ type: 'ProofOfHumanity', issuer: 'did:key:zIssuer', expirationDate: pastDate });
+    const constraint = JSON.stringify({
+      id: 'cred3',
+      constraint_kind: 'credential',
+      entry_type: 'triple',
+      required_vc_type: 'ProofOfHumanity',
+    });
+    const client = {
+      query: vi.fn().mockImplementation((_gql: string, vars: any) => {
+        if (vars?.query?.predicate === 'governance://has_constraint') {
+          return Promise.resolve({
+            perspectiveQueryLinks: [
+              { data: { source: 'urn:a', predicate: 'governance://has_constraint', target: constraint } },
+            ],
+          });
+        }
+        if (vars?.query?.predicate === 'vc://has_credential') {
+          return Promise.resolve({
+            perspectiveQueryLinks: [
+              { data: { source: 'did:key:zRoot', predicate: 'vc://has_credential', target: vc } },
+            ],
+          });
+        }
+        if (vars?.query?.predicate === 'has_child') {
+          return Promise.resolve({ perspectiveQueryLinks: [] });
+        }
+        return Promise.resolve({
+          agent: { did: 'did:key:zRoot' },
+          perspectiveQueryLinks: [],
+          perspective: { creator: 'did:key:zRoot' },
+        });
+      }),
+      mutate: vi.fn().mockResolvedValue({}),
+    } as any;
+
+    const gov = new GovernanceEngine('test-uuid', client);
+    const triple = new SemanticTriple('urn:a', 'hello', 'schema:text');
+    const result = await gov.canAddTriple(triple);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('not found');
+  });
+});
+
+// ── SPARQL client-side evaluation tests ──
+
+describe('PersonalGraph — SPARQL client-side evaluation', () => {
+  function makeSparqlClient(links: any[] = []) {
+    return {
+      query: vi.fn().mockImplementation((gql: string) => {
+        if (gql.includes('perspectiveSparqlQuery')) throw new Error('not available');
+        if (gql.includes('perspectiveInfer')) throw new Error('not available');
+        if (gql.includes('perspectiveSnapshot')) {
+          return Promise.resolve({
+            perspectiveSnapshot: { links },
+          });
+        }
+        if (gql.includes('agent')) {
+          return Promise.resolve({ agent: { did: 'did:key:z123', isUnlocked: true } });
+        }
+        return Promise.resolve({ perspectiveQueryLinks: [] });
+      }),
+      mutate: vi.fn(),
+    } as any;
+  }
+
+  it('evaluates basic SELECT ?s ?p ?o WHERE { ?s ?p ?o } over snapshot', async () => {
+    const { PersonalGraph } = await import('../graph.js');
+    const links = [
+      { data: { source: 'urn:alice', predicate: 'schema:knows', target: 'urn:bob' }, author: 'did:key:z1', timestamp: '2026-01-01T00:00:00Z', proof: { key: 'k', signature: 's', valid: true } },
+      { data: { source: 'urn:alice', predicate: 'schema:name', target: 'Alice' }, author: 'did:key:z1', timestamp: '2026-01-01T00:00:00Z', proof: { key: 'k', signature: 's', valid: true } },
+    ];
+    const client = makeSparqlClient(links);
+    const graph = new PersonalGraph('uuid1', 'test', client);
+    const result = await graph.querySparql('SELECT ?s ?p ?o WHERE { ?s ?p ?o }');
+    expect(result.type).toBe('bindings');
+    expect(result.bindings).toHaveLength(2);
+    expect(result.bindings[0]['?s']).toBe('urn:alice');
+  });
+
+  it('evaluates SPARQL with LIMIT', async () => {
+    const links = [
+      { data: { source: 'urn:a', predicate: 'p', target: 't1' }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's', valid: true } },
+      { data: { source: 'urn:b', predicate: 'p', target: 't2' }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's', valid: true } },
+    ];
+    const client = makeSparqlClient(links);
+    const graph = new (await import('../graph.js')).PersonalGraph('uuid1', 'test', client);
+    const result = await graph.querySparql('SELECT ?s WHERE { ?s ?p ?o } LIMIT 1');
+    expect(result.bindings).toHaveLength(1);
+  });
+
+  it('evaluates SPARQL with bound predicate', async () => {
+    const links = [
+      { data: { source: 'urn:a', predicate: 'schema:knows', target: 'urn:b' }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's', valid: true } },
+      { data: { source: 'urn:a', predicate: 'schema:name', target: 'Alice' }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's', valid: true } },
+    ];
+    const client = makeSparqlClient(links);
+    const graph = new (await import('../graph.js')).PersonalGraph('uuid1', 'test', client);
+    const result = await graph.querySparql('SELECT ?o WHERE { ?s schema:knows ?o }');
+    expect(result.bindings).toHaveLength(1);
+    expect(result.bindings[0]['?o']).toBe('urn:b');
+  });
+});
+
+// ── GraphDiff content-addressed verification ──
+
+describe('GraphDiff — content-addressed verification', () => {
+  it('revision is deterministic regardless of triple insertion order', async () => {
+    const { GraphDiff } = await import('../graph-diff.js');
+    const t1: any = { data: { source: 'urn:a', target: 'urn:b', predicate: 'p1' }, author: 'did:key:z1', timestamp: '2026-01-01T00:00:00Z', proof: { key: 'k', signature: 's' } };
+    const t2: any = { data: { source: 'urn:c', target: 'urn:d', predicate: 'p2' }, author: 'did:key:z1', timestamp: '2026-01-01T00:00:00Z', proof: { key: 'k', signature: 's' } };
+
+    const d1 = new GraphDiff([t1, t2], []);
+    const d2 = new GraphDiff([t2, t1], []); // reversed order
+    expect(await d1.computeRevision()).toBe(await d2.computeRevision());
+  });
+
+  it('parent revisions affect the revision hash', async () => {
+    const { GraphDiff } = await import('../graph-diff.js');
+    const t1: any = { data: { source: 'urn:a', target: 'urn:b', predicate: null }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's' } };
+
+    const d1 = new GraphDiff([t1], [], []);
+    const d2 = new GraphDiff([t1], [], ['parent-rev-abc']);
+    expect(await d1.computeRevision()).not.toBe(await d2.computeRevision());
+  });
+
+  it('DiffDAG enforces causal ordering before apply', async () => {
+    const { GraphDiff, DiffDAG } = await import('../graph-diff.js');
+    const dag = new DiffDAG();
+    const t1: any = { data: { source: 'urn:a', target: 'urn:b', predicate: null }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's' } };
+    const t2: any = { data: { source: 'urn:c', target: 'urn:d', predicate: null }, author: 'a', timestamp: 't', proof: { key: 'k', signature: 's' } };
+
+    const d1 = new GraphDiff([t1], []);
+    const rev1 = await d1.computeRevision();
+
+    // d2 depends on d1
+    const d2 = new GraphDiff([t2], [], [rev1]);
+
+    // Try applying d2 first — should queue
+    expect(await dag.tryApply(d2)).toBe(false);
+
+    // Apply d1
+    expect(await dag.tryApply(d1)).toBe(true);
+
+    // Now flush — d2 should apply
+    const flushed = await dag.flushPending();
+    expect(flushed).toHaveLength(1);
+    expect(flushed[0]).toBe(await d2.computeRevision());
   });
 });

@@ -171,10 +171,43 @@ export class PersonalGraph extends EventTarget {
 
   async querySparql(sparql: string): Promise<SparqlResult> {
     // §4.2.5: MUST execute SPARQL SELECT/CONSTRUCT
-    // Strategy: try infer() first (AD4M's Prolog/SPARQL hybrid), then fall back
-    // to client-side SPARQL evaluation over snapshot.
+    // Strategy:
+    // 1. Try AD4M's native SPARQL endpoint (Oxigraph) if available
+    // 2. Try perspectiveInfer (Prolog-based)
+    // 3. Fall back to client-side SPARQL evaluation over snapshot
 
-    // First, try AD4M's infer endpoint which can handle SPARQL-like queries
+    // 1. Try native SPARQL query via GraphQL (AD4M Oxigraph)
+    try {
+      const data = await this._client.query<{ perspectiveSparqlQuery: string }>(
+        `query($uuid: String!, $query: String!) {
+          perspectiveSparqlQuery(uuid: $uuid, query: $query)
+        }`,
+        { uuid: this.uuid, query: sparql },
+      );
+      if (data.perspectiveSparqlQuery) {
+        const parsed = JSON.parse(data.perspectiveSparqlQuery);
+        if (Array.isArray(parsed)) {
+          return { type: 'bindings', bindings: parsed };
+        }
+        // Standard SPARQL JSON results format
+        if (parsed.results?.bindings) {
+          return {
+            type: 'bindings',
+            bindings: parsed.results.bindings.map((b: Record<string, { value: string }>) => {
+              const row: Record<string, string> = {};
+              for (const [k, v] of Object.entries(b)) {
+                row[`?${k}`] = v.value;
+              }
+              return row;
+            }),
+          };
+        }
+      }
+    } catch {
+      // perspectiveSparqlQuery not available — try next strategy
+    }
+
+    // 2. Try perspectiveInfer (AD4M's Prolog/SPARQL hybrid)
     try {
       const data = await this._client.query<{ perspectiveInfer: string }>(
         `query($uuid: String!, $query: String!) {
@@ -187,11 +220,10 @@ export class PersonalGraph extends EventTarget {
         return { type: 'bindings', bindings: parsed };
       }
     } catch {
-      // perspectiveInfer not available or failed — fall through
+      // perspectiveInfer not available — fall through
     }
 
-    // Fall back: evaluate SPARQL client-side over the triple snapshot
-    // Supports basic SELECT with WHERE { ?s ?p ?o } patterns + FILTER + LIMIT
+    // 3. Fall back: evaluate SPARQL client-side over the triple snapshot
     const allTriples = await this.snapshot();
     return this.evaluateSparqlLocally(sparql, allTriples);
   }

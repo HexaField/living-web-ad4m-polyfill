@@ -18,6 +18,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@noble/ed25519": "^3.0.1",
     "graphql-ws": "^5.16.0"
   },
   "devDependencies": {
@@ -29,5 +30,12 @@
     "type": "git",
     "url": "https://github.com/HexaField/living-web-ad4m-polyfill"
   },
-  "keywords": ["living-web", "ad4m", "polyfill", "navigator.graph", "decentralized", "linked-data"]
+  "keywords": [
+    "living-web",
+    "ad4m",
+    "polyfill",
+    "navigator.graph",
+    "decentralized",
+    "linked-data"
+  ]
 }

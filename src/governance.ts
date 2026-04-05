@@ -1,3 +1,4 @@
+import * as ed from '@noble/ed25519';
 import { AD4MClient } from './client.js';
 import type {
   ValidationResult,
@@ -8,6 +9,78 @@ import type {
   ConstraintKind,
   LinkExpression,
 } from './types.js';
+
+/** Decode a did:key multibase-encoded Ed25519 public key to raw 32 bytes */
+function didKeyToPublicKey(did: string): Uint8Array | null {
+  // did:key:z6Mk... — z = base58btc, 0xed01 prefix for Ed25519
+  if (!did.startsWith('did:key:z')) return null;
+  const multibase = did.replace('did:key:z', '');
+  try {
+    const decoded = base58btcDecode(multibase);
+    // Strip the 2-byte multicodec prefix (0xed, 0x01)
+    if (decoded.length >= 34 && decoded[0] === 0xed && decoded[1] === 0x01) {
+      return decoded.slice(2);
+    }
+    // Some encodings may already be raw 32 bytes
+    if (decoded.length === 32) return decoded;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Base58btc decoder (Bitcoin alphabet) */
+function base58btcDecode(str: string): Uint8Array {
+  const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const BASE = 58n;
+  let num = 0n;
+  for (const ch of str) {
+    const idx = ALPHABET.indexOf(ch);
+    if (idx === -1) throw new Error(`Invalid base58 character: ${ch}`);
+    num = num * BASE + BigInt(idx);
+  }
+  const hex = num.toString(16).padStart(2, '0');
+  const rawHex = hex.length % 2 ? '0' + hex : hex;
+  const bytes = new Uint8Array(rawHex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(rawHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  // Handle leading zeros
+  let leadingZeros = 0;
+  for (const ch of str) {
+    if (ch === '1') leadingZeros++;
+    else break;
+  }
+  if (leadingZeros > 0) {
+    const result = new Uint8Array(leadingZeros + bytes.length);
+    result.set(bytes, leadingZeros);
+    return result;
+  }
+  return bytes;
+}
+
+/** Verify an Ed25519 signature locally using @noble/ed25519 */
+async function verifyEd25519Signature(
+  publicKey: Uint8Array,
+  message: Uint8Array,
+  signature: Uint8Array,
+): Promise<boolean> {
+  try {
+    return await ed.verifyAsync(signature, message, publicKey);
+  } catch {
+    return false;
+  }
+}
+
+/** Convert hex string to Uint8Array */
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
 
 const MAX_DELEGATION_DEPTH = 10;
 const MAX_SCOPE_DEPTH = 100;
@@ -334,26 +407,38 @@ export class GovernanceEngine {
     const requiredIssuer = props.required_issuer as string | undefined;
     const maxAgeSec = props.max_age_seconds as number | undefined;
 
-    // Query agent's credentials from AD4M
+    // Query agent's verifiable credentials stored as links in the perspective
+    // VCs are stored as: source=<did> predicate=vc://has_credential target=<vc_json>
     let credentials: Array<Record<string, unknown>> = [];
     try {
-      const data = await this.client.query<{ agentGetEntryLanguages: string }>(
-        `query($did: String!) { agentByDID(did: $did) { directMessageLanguage perspective { links { data { source predicate target } timestamp } } } }`,
-        { did },
+      const vcLinks = await this.client.query<{ perspectiveQueryLinks: LinkExpression[] }>(
+        `query($uuid: String!, $query: LinkQuery!) {
+          perspectiveQueryLinks(uuid: $uuid, query: $query) {
+            data { source predicate target }
+          }
+        }`,
+        {
+          uuid: this.perspectiveUuid,
+          query: { source: did, predicate: 'vc://has_credential' },
+        },
       );
-      // If agent has verifiable credentials stored as links
-      const agentData = data as any;
-      if (agentData?.agentByDID?.perspective?.links) {
-        credentials = agentData.agentByDID.perspective.links
-          .filter((l: any) => l.data.predicate === 'vc://has_credential')
-          .map((l: any) => {
-            try { return JSON.parse(l.data.target); } catch { return null; }
-          })
-          .filter(Boolean);
-      }
+      credentials = vcLinks.perspectiveQueryLinks
+        .map(l => {
+          try { return JSON.parse(l.data.target); } catch { return null; }
+        })
+        .filter(Boolean) as Array<Record<string, unknown>>;
     } catch {
-      // Agent query failed — check if constraints are strict
+      // Query failed — no credentials available
     }
+
+    // Filter out expired credentials before evaluation
+    const now = new Date();
+    credentials = credentials.filter(vc => {
+      if (vc.expirationDate) {
+        return new Date(vc.expirationDate as string) >= now;
+      }
+      return true;
+    });
 
     // Check VC type
     if (requiredType) {
@@ -381,12 +466,12 @@ export class GovernanceEngine {
       }
     }
 
-    // Check age (expiry)
+    // Check age
     if (maxAgeSec) {
-      const now = Date.now();
+      const nowMs = Date.now();
       const validCreds = credentials.filter(vc => {
         const issuedAt = vc.issuanceDate ? new Date(vc.issuanceDate as string).getTime() : 0;
-        return (now - issuedAt) / 1000 <= maxAgeSec;
+        return (nowMs - issuedAt) / 1000 <= maxAgeSec;
       });
       if (requiredType && validCreds.length === 0) {
         return {
@@ -394,17 +479,6 @@ export class GovernanceEngine {
           reason: `No credential within max age of ${maxAgeSec}s`,
           constraint: constraint.id,
         };
-      }
-    }
-
-    // Check expiry on credentials themselves
-    for (const vc of credentials) {
-      if (vc.expirationDate) {
-        const expiry = new Date(vc.expirationDate as string);
-        if (expiry < new Date()) {
-          // Expired credentials are filtered out, not a rejection
-          continue;
-        }
       }
     }
 
@@ -675,8 +749,9 @@ export class GovernanceEngine {
 
   /**
    * §6/§12.1: Verify ZCAP chain signatures cryptographically.
-   * Walks the delegation chain and verifies each signature using AD4M's
-   * runtime signature verification (Ed25519).
+   * Walks the delegation chain and verifies each Ed25519 signature locally
+   * using @noble/ed25519. Falls back to AD4M executor verification if
+   * the DID format is not a recognized did:key.
    */
   private async verifyZcapChainSignatures(capabilityId: string): Promise<boolean> {
     const visited = new Set<string>();
@@ -695,20 +770,33 @@ export class GovernanceEngine {
 
       // Verify cryptographic signature
       if (zcap.signature && zcap.delegatedBy) {
-        // The signature is over the capability content (minus the signature field)
         const { signature, ...content } = zcap;
         const contentStr = JSON.stringify(content);
-        try {
-          const valid = await this.client.query<{ runtimeVerifyStringSignedByDid: boolean }>(
-            `query($did: String!, $data: String!, $signedData: String!) {
-              runtimeVerifyStringSignedByDid(did: $did, didSigningKeyId: "", data: $data, signedData: $signedData)
-            }`,
-            { did: zcap.delegatedBy, data: contentStr, signedData: signature },
-          );
-          if (!valid.runtimeVerifyStringSignedByDid) return false;
-        } catch {
-          // Verification endpoint unavailable — fail closed
-          return false;
+        const messageBytes = new TextEncoder().encode(contentStr);
+
+        // Try local Ed25519 verification first (preferred — no executor dependency)
+        const publicKey = didKeyToPublicKey(zcap.delegatedBy);
+        if (publicKey) {
+          try {
+            const sigBytes = hexToBytes(signature);
+            const valid = await verifyEd25519Signature(publicKey, messageBytes, sigBytes);
+            if (!valid) return false;
+          } catch {
+            return false; // Malformed signature — fail closed
+          }
+        } else {
+          // Not a did:key or unrecognized format — fall back to executor verification
+          try {
+            const valid = await this.client.query<{ runtimeVerifyStringSignedByDid: boolean }>(
+              `query($did: String!, $data: String!, $signedData: String!) {
+                runtimeVerifyStringSignedByDid(did: $did, didSigningKeyId: "", data: $data, signedData: $signedData)
+              }`,
+              { did: zcap.delegatedBy, data: contentStr, signedData: signature },
+            );
+            if (!valid.runtimeVerifyStringSignedByDid) return false;
+          } catch {
+            return false; // Verification endpoint unavailable — fail closed
+          }
         }
       }
 
