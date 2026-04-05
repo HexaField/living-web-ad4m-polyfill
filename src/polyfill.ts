@@ -9,7 +9,6 @@ declare global {
     graph?: PersonalGraphManager & {
       join(url: string): Promise<SharedGraph>;
     };
-    // credentials already exists in DOM types; we extend it
   }
 }
 
@@ -59,3 +58,9 @@ export async function install(config?: AD4MPolyfillConfig): Promise<void> {
 
 export { AD4MClient } from './client.js';
 export { Config, type AD4MPolyfillConfig } from './config.js';
+export { PersonalGraph } from './graph.js';
+export { SharedGraph } from './shared-graph.js';
+export { PersonalGraphManager } from './graph-manager.js';
+export { IdentityManager, DIDCredential } from './identity.js';
+export { ShapeManager } from './shapes.js';
+export { GovernanceEngine } from './governance.js';

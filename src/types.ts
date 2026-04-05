@@ -70,11 +70,12 @@ export interface AgentStatus {
   didDocument: string | null;
 }
 
-// ── Governance types (stubbed) ──
+// ── Governance types ──
 
 export interface ValidationResult {
   readonly allowed: boolean;
   readonly reason?: string;
+  readonly constraint?: string;
 }
 
 export interface CapabilityInfo {
@@ -82,11 +83,76 @@ export interface CapabilityInfo {
   readonly predicates: string[];
   readonly scope: string | null;
   readonly expires: string | null;
+  readonly delegatedBy: string | null;
+  readonly depth: number;
 }
 
 export interface GraphConstraint {
   readonly id: string;
-  readonly kind: string;
+  readonly kind: ConstraintKind;
   readonly scope: string;
-  readonly properties: Record<string, string>;
+  readonly entryType: string;
+  readonly properties: Record<string, unknown>;
+}
+
+export type ConstraintKind =
+  | 'capability'
+  | 'credential'
+  | 'temporal'
+  | 'content';
+
+export interface CapabilityConstraint {
+  readonly enforcement: 'allow' | 'deny';
+  readonly predicates: string[];
+}
+
+export interface TemporalConstraint {
+  readonly minIntervalMs?: number;
+  readonly windowMs?: number;
+  readonly maxCountPerWindow?: number;
+}
+
+export interface ContentConstraint {
+  readonly maxLength?: number;
+  readonly blockedPatterns?: string[];
+  readonly urlPolicy?: 'allow' | 'deny';
+  readonly allowedDomains?: string[];
+  readonly allowedMediaTypes?: string[];
+}
+
+export interface ZcapCapability {
+  readonly id: string;
+  readonly invoker: string;
+  readonly parentCapability?: string;
+  readonly predicates: string[];
+  readonly expires?: string;
+  readonly signature: string;
+  readonly delegatedBy: string;
+}
+
+// ── Shape types ──
+
+export interface ShapeDefinition {
+  readonly targetClass: string;
+  readonly properties: ShapeProperty[];
+  readonly constructor: ShapeConstructorAction[];
+}
+
+export interface ShapeProperty {
+  readonly path: string;
+  readonly name: string;
+  readonly datatype?: string;
+  readonly minCount?: number;
+  readonly maxCount?: number;
+  readonly writable?: boolean;
+  readonly collection?: boolean;
+}
+
+export interface ShapeConstructorAction {
+  readonly action: 'addTriple';
+  readonly source: string;
+  readonly predicate: string;
+  readonly target: string;
+  readonly required?: boolean;
+  readonly paramName?: string;
 }

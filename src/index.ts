@@ -21,5 +21,13 @@ export {
   type ValidationResult,
   type CapabilityInfo,
   type GraphConstraint,
+  type ConstraintKind,
+  type CapabilityConstraint,
+  type TemporalConstraint,
+  type ContentConstraint,
+  type ZcapCapability,
+  type ShapeDefinition,
+  type ShapeProperty,
+  type ShapeConstructorAction,
 } from './types.js';
 export { tripleToLink, linkExpressionToSignedTriple, tripleQueryToLinkQuery } from './converters.js';
