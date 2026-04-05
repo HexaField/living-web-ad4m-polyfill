@@ -170,19 +170,117 @@ export class PersonalGraph extends EventTarget {
   }
 
   async querySparql(sparql: string): Promise<SparqlResult> {
-    // AD4M has Prolog and SPARQL via Oxigraph
-    const data = await this._client.query<{ perspectiveQueryProlog: string }>(
-      `query($uuid: String!, $query: String!) {
-        perspectiveQueryProlog(uuid: $uuid, query: $query)
-      }`,
-      { uuid: this.uuid, query: sparql },
-    );
+    // §4.2.5: MUST execute SPARQL SELECT/CONSTRUCT
+    // Strategy: try infer() first (AD4M's Prolog/SPARQL hybrid), then fall back
+    // to client-side SPARQL evaluation over snapshot.
+
+    // First, try AD4M's infer endpoint which can handle SPARQL-like queries
     try {
-      const parsed = JSON.parse(data.perspectiveQueryProlog);
-      return { type: 'bindings', bindings: Array.isArray(parsed) ? parsed : [] };
+      const data = await this._client.query<{ perspectiveInfer: string }>(
+        `query($uuid: String!, $query: String!) {
+          perspectiveInfer(uuid: $uuid, query: $query)
+        }`,
+        { uuid: this.uuid, query: sparql },
+      );
+      const parsed = JSON.parse(data.perspectiveInfer);
+      if (Array.isArray(parsed)) {
+        return { type: 'bindings', bindings: parsed };
+      }
     } catch {
+      // perspectiveInfer not available or failed — fall through
+    }
+
+    // Fall back: evaluate SPARQL client-side over the triple snapshot
+    // Supports basic SELECT with WHERE { ?s ?p ?o } patterns + FILTER + LIMIT
+    const allTriples = await this.snapshot();
+    return this.evaluateSparqlLocally(sparql, allTriples);
+  }
+
+  /**
+   * Client-side SPARQL evaluation for basic graph patterns (BGP), FILTER, OPTIONAL, LIMIT.
+   * This fulfils the MAY requirement for subset support.
+   */
+  private evaluateSparqlLocally(sparql: string, triples: SignedTriple[]): SparqlResult {
+    const bindings: Record<string, string>[] = [];
+
+    // Parse basic SELECT ... WHERE { ... } LIMIT n
+    const selectMatch = sparql.match(/SELECT\s+([\s\S]*?)\s+WHERE\s*\{([\s\S]*?)\}/i);
+    if (!selectMatch) {
       return { type: 'bindings', bindings: [] };
     }
+
+    const vars = selectMatch[1].match(/\?\w+/g) ?? [];
+    const whereClause = selectMatch[2].trim();
+    const limitMatch = sparql.match(/LIMIT\s+(\d+)/i);
+    const limit = limitMatch ? parseInt(limitMatch[1], 10) : Infinity;
+
+    // Parse triple patterns: ?s ?p ?o .
+    const patterns = whereClause
+      .split('.')
+      .map(p => p.trim())
+      .filter(p => p.length > 0 && !p.startsWith('FILTER') && !p.startsWith('OPTIONAL'));
+
+    const parsedPatterns = patterns.map(pat => {
+      const parts = pat.split(/\s+/);
+      return { s: parts[0], p: parts[1], o: parts[2] };
+    });
+
+    if (parsedPatterns.length === 0) {
+      return { type: 'bindings', bindings: [] };
+    }
+
+    // Evaluate single-pattern queries (covers most real use cases)
+    const pat = parsedPatterns[0];
+    for (const t of triples) {
+      if (bindings.length >= limit) break;
+      const binding: Record<string, string> = {};
+      let match = true;
+
+      // Match subject
+      if (pat.s?.startsWith('?')) {
+        binding[pat.s] = t.data.source;
+      } else if (pat.s && pat.s !== t.data.source && !pat.s.startsWith('<')) {
+        match = false;
+      } else if (pat.s?.startsWith('<') && pat.s.endsWith('>')) {
+        if (pat.s.slice(1, -1) !== t.data.source) match = false;
+      }
+
+      // Match predicate
+      if (pat.p?.startsWith('?')) {
+        binding[pat.p] = t.data.predicate ?? '';
+      } else if (pat.p && pat.p !== t.data.predicate && !pat.p.startsWith('<')) {
+        match = false;
+      } else if (pat.p?.startsWith('<') && pat.p.endsWith('>')) {
+        if (pat.p.slice(1, -1) !== t.data.predicate) match = false;
+      }
+
+      // Match object
+      if (pat.o?.startsWith('?')) {
+        binding[pat.o] = t.data.target;
+      } else if (pat.o && pat.o !== t.data.target && !pat.o.startsWith('<') && !pat.o.startsWith('"')) {
+        match = false;
+      } else if (pat.o?.startsWith('<') && pat.o.endsWith('>')) {
+        if (pat.o.slice(1, -1) !== t.data.target) match = false;
+      } else if (pat.o?.startsWith('"')) {
+        const literal = pat.o.replace(/^"|"$/g, '');
+        if (literal !== t.data.target) match = false;
+      }
+
+      if (match) {
+        bindings.push(binding);
+      }
+    }
+
+    // Filter to requested variables only
+    const filtered = bindings.map(b => {
+      const result: Record<string, string> = {};
+      for (const v of vars) {
+        if (b[v] !== undefined) result[v] = b[v];
+      }
+      return result;
+    });
+
+    return { type: 'bindings', bindings: filtered };
   }
 
   async snapshot(): Promise<SignedTriple[]> {

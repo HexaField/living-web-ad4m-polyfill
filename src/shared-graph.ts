@@ -1,6 +1,7 @@
 import { AD4MClient } from './client.js';
 import { PersonalGraph } from './graph.js';
 import { GovernanceEngine } from './governance.js';
+import { GraphDiff, DiffDAG } from './graph-diff.js';
 import type {
   PerspectiveHandle,
   SemanticTriple,
@@ -14,14 +15,17 @@ import type {
 export class SharedGraph extends PersonalGraph {
   readonly sharedUrl: string;
   private governance: GovernanceEngine;
+  private _diffDAG: DiffDAG;
+  private _lastRevision: string | null = null;
 
   constructor(uuid: string, name: string | null, sharedUrl: string, client: AD4MClient) {
     super(uuid, name, client);
     this.sharedUrl = sharedUrl;
     this.governance = new GovernanceEngine(uuid, client);
+    this._diffDAG = new DiffDAG();
   }
 
-  // ── Override addTriple to evaluate governance ──
+  // ── Override addTriple to evaluate governance + track diffs ──
 
   async addTriple(triple: SemanticTriple): Promise<SignedTriple> {
     // §10.1: Sync MUST evaluate governance for every incoming triple
@@ -32,7 +36,17 @@ export class SharedGraph extends PersonalGraph {
         'NotAllowedError',
       );
     }
-    return super.addTriple(triple);
+    const signed = await super.addTriple(triple);
+
+    // §4.2/§6.2: Track as GraphDiff with causal dependencies
+    const parentRevisions = this._lastRevision ? [this._lastRevision] : [];
+    const diff = new GraphDiff([signed], [], parentRevisions);
+    const applied = await this._diffDAG.tryApply(diff);
+    if (applied) {
+      this._lastRevision = await diff.computeRevision();
+    }
+
+    return signed;
   }
 
   async addTriples(triples: SemanticTriple[]): Promise<SignedTriple[]> {
@@ -46,7 +60,45 @@ export class SharedGraph extends PersonalGraph {
         );
       }
     }
-    return super.addTriples(triples);
+    const signedTriples = await super.addTriples(triples);
+
+    // Track batch as single GraphDiff
+    const parentRevisions = this._lastRevision ? [this._lastRevision] : [];
+    const diff = new GraphDiff(signedTriples, [], parentRevisions);
+    const applied = await this._diffDAG.tryApply(diff);
+    if (applied) {
+      this._lastRevision = await diff.computeRevision();
+    }
+
+    return signedTriples;
+  }
+
+  /**
+   * Apply an incoming diff from a remote peer.
+   * §6.2: MUST NOT apply diff until dependencies satisfied.
+   * §10.1: Sync MUST evaluate governance for every incoming triple.
+   */
+  async applyRemoteDiff(diff: GraphDiff): Promise<boolean> {
+    // Verify governance for all additions
+    for (const triple of diff.additions) {
+      const result = await this.governance.canAddTriple(triple.data);
+      if (!result.allowed) {
+        // §10.1: Rejected triples MUST NOT be stored or forwarded
+        return false;
+      }
+    }
+
+    const applied = await this._diffDAG.tryApply(diff);
+    if (applied) {
+      this._lastRevision = await diff.computeRevision();
+      // Also flush any pending diffs that are now unblocked
+      await this._diffDAG.flushPending();
+    }
+    return applied;
+  }
+
+  get lastRevision(): string | null {
+    return this._lastRevision;
   }
 
   // ── Peer operations ──

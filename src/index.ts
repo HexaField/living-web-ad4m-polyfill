@@ -5,6 +5,7 @@ export { PersonalGraph } from './graph.js';
 export { SharedGraph } from './shared-graph.js';
 export { DIDCredential, IdentityManager } from './identity.js';
 export { ShapeManager } from './shapes.js';
+export { GraphDiff, DiffDAG } from './graph-diff.js';
 export { GovernanceEngine } from './governance.js';
 export { AD4MClient } from './client.js';
 export { Config, type AD4MPolyfillConfig } from './config.js';
