@@ -591,3 +591,31 @@ describe('GraphDiff — content-addressed verification', () => {
     expect(flushed[0]).toBe(await d2.computeRevision());
   });
 });
+
+// ── SharedGraph moduleHash + currentRevision tests ──
+
+describe('SharedGraph sync properties', () => {
+  it('exposes moduleHash from constructor', async () => {
+    const { SharedGraph } = await import('../shared-graph.js');
+    const { AD4MClient } = await import('../client.js');
+    const client = new AD4MClient({ executorUrl: 'http://localhost:12000/graphql' });
+    const sg = new SharedGraph('test-uuid', 'test', 'neighbourhood://test', client, 'Qm123abc');
+    expect(sg.moduleHash).toBe('Qm123abc');
+  });
+
+  it('moduleHash defaults to empty string', async () => {
+    const { SharedGraph } = await import('../shared-graph.js');
+    const { AD4MClient } = await import('../client.js');
+    const client = new AD4MClient({ executorUrl: 'http://localhost:12000/graphql' });
+    const sg = new SharedGraph('test-uuid', 'test', 'neighbourhood://test', client);
+    expect(sg.moduleHash).toBe('');
+  });
+
+  it('currentRevision() returns null initially', async () => {
+    const { SharedGraph } = await import('../shared-graph.js');
+    const { AD4MClient } = await import('../client.js');
+    const client = new AD4MClient({ executorUrl: 'http://localhost:12000/graphql' });
+    const sg = new SharedGraph('test-uuid', 'test', 'neighbourhood://test', client);
+    expect(await sg.currentRevision()).toBeNull();
+  });
+});

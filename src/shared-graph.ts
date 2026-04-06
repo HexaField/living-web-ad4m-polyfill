@@ -14,13 +14,15 @@ import type {
 
 export class SharedGraph extends PersonalGraph {
   readonly sharedUrl: string;
+  readonly moduleHash: string;
   private governance: GovernanceEngine;
   private _diffDAG: DiffDAG;
   private _lastRevision: string | null = null;
 
-  constructor(uuid: string, name: string | null, sharedUrl: string, client: AD4MClient) {
+  constructor(uuid: string, name: string | null, sharedUrl: string, client: AD4MClient, moduleHash?: string) {
     super(uuid, name, client);
     this.sharedUrl = sharedUrl;
+    this.moduleHash = moduleHash ?? '';
     this.governance = new GovernanceEngine(uuid, client);
     this._diffDAG = new DiffDAG();
   }
@@ -101,6 +103,13 @@ export class SharedGraph extends PersonalGraph {
     return this._lastRevision;
   }
 
+  /**
+   * §6.2: Return the latest committed revision hash for this shared graph.
+   */
+  async currentRevision(): Promise<string | null> {
+    return this._lastRevision;
+  }
+
   // ── Peer operations ──
 
   async peers(): Promise<string[]> {
@@ -173,20 +182,32 @@ export class SharedGraph extends PersonalGraph {
     client: AD4MClient,
     linkLanguage: string,
     meta?: Record<string, string>,
+    opts?: { module?: string; relays?: string[] },
   ): Promise<SharedGraph> {
-    const metaInput = meta
+    // Map module to link language hash if provided
+    const ll = opts?.module ?? linkLanguage;
+    const metaEntries = meta
       ? Object.entries(meta).map(([k, v]) => ({
           data: { source: 'self', predicate: k, target: v },
           author: '', timestamp: '', proof: { key: '', signature: '', valid: true },
         }))
       : [];
+    // Map relays to bootstrap servers in meta
+    if (opts?.relays) {
+      for (const relay of opts.relays) {
+        metaEntries.push({
+          data: { source: 'self', predicate: 'bootstrap', target: relay },
+          author: '', timestamp: '', proof: { key: '', signature: '', valid: true },
+        });
+      }
+    }
     const data = await client.mutate<{ neighbourhoodPublishFromPerspective: string }>(
       `mutation($uuid: String!, $ll: String!, $meta: PerspectiveInput!) {
         neighbourhoodPublishFromPerspective(perspectiveUUID: $uuid, linkLanguage: $ll, meta: $meta)
       }`,
-      { uuid: graph.uuid, ll: linkLanguage, meta: { links: metaInput } },
+      { uuid: graph.uuid, ll, meta: { links: metaEntries } },
     );
-    return new SharedGraph(graph.uuid, graph.name, data.neighbourhoodPublishFromPerspective, client);
+    return new SharedGraph(graph.uuid, graph.name, data.neighbourhoodPublishFromPerspective, client, ll);
   }
 
   static async join(url: string, client: AD4MClient): Promise<SharedGraph> {

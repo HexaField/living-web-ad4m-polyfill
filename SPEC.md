@@ -71,6 +71,9 @@ This polyfill package (`@living-web/ad4m-polyfill`) implements the Living Web in
 | `shared.sendSignal(did, payload)` | `mutation { neighbourhoodSendSignal(perspectiveUUID: $uuid, remoteAgentDid: $did, payload: $data) }` | Direct signal |
 | `shared.broadcast(payload)` | `mutation { neighbourhoodSendBroadcast(perspectiveUUID: $uuid, payload: $data) }` | Broadcast to all peers |
 | `shared.leave(opts?)` | `mutation { perspectiveRemove(uuid: $uuid) }` | Optionally retain local copy by not deleting |
+| `graph.share({module})` | `mutation { neighbourhoodPublishFromPerspective(uuid, linkLanguageHash, meta) }` | `module` = link language content hash; `relays` mapped to bootstrap server meta entries |
+| `shared.moduleHash` | Link language hash for this neighbourhood | The content hash of the sync module (link language) used by this shared graph |
+| `shared.currentRevision()` | Latest committed revision | Returns the most recent diff DAG revision hash, or `null` if no commits |
 | `shared.syncState` | `subscription { perspectiveSyncStateChange(uuid: $uuid) }` | Map to `GraphSyncState` |
 | Signal received | `subscription { neighbourhoodSignal(perspectiveUUID: $uuid) }` | WebSocket |
 
