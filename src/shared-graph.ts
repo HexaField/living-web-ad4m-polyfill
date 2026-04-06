@@ -15,6 +15,7 @@ import type {
 export class SharedGraph extends PersonalGraph {
   readonly sharedUrl: string;
   readonly moduleHash: string;
+  readonly sessionId: string;
   private governance: GovernanceEngine;
   private _diffDAG: DiffDAG;
   private _lastRevision: string | null = null;
@@ -23,6 +24,7 @@ export class SharedGraph extends PersonalGraph {
     super(uuid, name, client);
     this.sharedUrl = sharedUrl;
     this.moduleHash = moduleHash ?? '';
+    this.sessionId = crypto.randomUUID();
     this.governance = new GovernanceEngine(uuid, client);
     this._diffDAG = new DiffDAG();
   }
@@ -132,6 +134,12 @@ export class SharedGraph extends PersonalGraph {
       }`,
       { uuid: this.uuid, did, payload },
     );
+  }
+
+  async sendSignalToSession(did: string, sessionId: string, payload: unknown): Promise<void> {
+    // Wrap payload with session targeting metadata; the receiving end filters by sessionId
+    const sessionPayload = { __sessionTarget: sessionId, data: payload };
+    await this.sendSignal(did, sessionPayload);
   }
 
   async broadcast(payload: unknown): Promise<void> {

@@ -69,6 +69,7 @@ This polyfill package (`@living-web/ad4m-polyfill`) implements the Living Web in
 | `navigator.graph.join(url)` | `mutation { neighbourhoodJoinFromUrl(url: $url) { uuid } }` | Returns perspective UUID → wrap as `SharedGraph` |
 | `shared.peers()` | `query { neighbourhoodOnlineAgents(perspectiveUUID: $uuid) }` | Returns DIDs of online peers |
 | `shared.sendSignal(did, payload)` | `mutation { neighbourhoodSendSignal(perspectiveUUID: $uuid, remoteAgentDid: $did, payload: $data) }` | Direct signal |
+| `shared.sendSignalToSession(did, sessionId, payload)` | `mutation { neighbourhoodSendSignal(...) }` with `__sessionTarget` wrapper | Targets a specific session (tab/device) of a peer |
 | `shared.broadcast(payload)` | `mutation { neighbourhoodSendBroadcast(perspectiveUUID: $uuid, payload: $data) }` | Broadcast to all peers |
 | `shared.leave(opts?)` | `mutation { perspectiveRemove(uuid: $uuid) }` | Optionally retain local copy by not deleting |
 | `graph.share({module})` | `mutation { neighbourhoodPublishFromPerspective(uuid, linkLanguageHash, meta) }` | `module` = link language content hash; `relays` mapped to bootstrap server meta entries |
